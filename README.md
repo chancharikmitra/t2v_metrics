@@ -46,7 +46,7 @@ VQAScore significantly outperforms previous metrics such as CLIPScore and PickSc
 | Llama-3.2 | :heavy_check_mark: | | llama-3.2-1b, llama-3.2-3b, llama-3.2-1b-instruct, llama-3.2-3b-instruct, llama-3.2-11b-vision, llama-3.2-11b-vision-instruct, llama-3.2-90b-vision, llama-3.2-90b-vision-instruct |
 | Llama-Guard-3 | :heavy_check_mark: | | llama-guard-3-1b, llama-guard-3-11b-vision |
 | Molmo | :heavy_check_mark: | | molmo-72b-0924, molmo-7b-d-0924, molmo-7b-o-0924, molmoe-1b-0924 |
-| Gemini | :heavy_check_mark: | :heavy_check_mark: | gemini-1.5-pro, gemini-1.5-flash, gemini-2.5-pro-preview-03-25 |
+| Gemini | :heavy_check_mark: | :heavy_check_mark: | gemini-1.5-pro, gemini-1.5-flash, gemini-2.5-pro |
 | Qwen2-VL | :heavy_check_mark: | :heavy_check_mark: | qwen2-vl-2b, qwen2-vl-7b, qwen2-vl-72b |
 | Qwen2.5-VL | :heavy_check_mark: | :heavy_check_mark: | qwen2.5-vl-3b, qwen2.5-vl-7b, qwen2.5-vl-32b, qwen2.5-vl-72b |
 | LLaVA-Video | | :heavy_check_mark: | llava-video-7b, llava-video-72B |
