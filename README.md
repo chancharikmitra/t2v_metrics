@@ -14,6 +14,7 @@ Baiqi Li*, [Zhiqiu Lin*](https://linzhiqiu.github.io/), [Deepak Pathak](https://
 [Zhiqiu Lin\*](https://linzhiqiu.github.io/), Siyuan Cen\*, Daniel Jiang, Jay Karhade, Hewei Wang, [Chancharik Mitra](https://x.com/chancharikm), Tiffany Yu Tong Ling, Yuhan Huang, Sifan Liu, Mingyu Chen, Rushikesh Zawar, Xue Bai, Yilun Du, Chuang Gan, [Deva Ramanan](https://www.cs.cmu.edu/~deva/) (\*Co-First Authors)
 
 ## News
+- [2025/10/01] 🚀 **VQAScore** now supports **Qwen3-VL** and **Qwen3-Omni** models! Qwen3-VL-235B brings state-of-the-art vision-language understanding with both standard and thinking variants. Qwen3-Omni-30B adds groundbreaking **multimodal capabilities** including audio processing, making it the first audio-enabled model in the VQAScore framework for comprehensive image, video, and audio-text alignment evaluation. See [Audio-Visual-Text Alignment and Generation](#audio-visual-text-alignment-and-generation) for usage examples.
 - [2025/09/03] 🚀 **VQAScore** gets a **major upgrade** with support for **20+ state-of-the-art video-language models** for [video-based VQAScore](#video-text-alignment-scores) (e.g., Qwen2.5-VL, LLaVA-Video, etc.), along with full integration of the new benchmark [CameraBench](https://linzhiqiu.github.io/papers/camerabench/) for evaluating camera-motion understanding in text-to-video models like Kling and Runway. Huge thanks to our collaborator **Chancharik Mitra** for leading this milestone update!
 - [2025/09/03] ✨ **VQAScore** has become the **go-to evaluation choice for generative models**: **GenAI-Bench** is now adopted by **Google DeepMind** (Imagen3 & Imagen4), **Bytedance Seed**, **NVIDIA**, and others. Meanwhile, our **open-source CLIP-FlanT5 models** have been downloaded over **2 million times** on Hugging Face!
 - [2024/08/13] 🔥 **VQAScore** is highlighted in Google's [Imagen3 report](https://arxiv.org/abs/2408.07009) as the strongest replacement of CLIPScore for automated evaluation! **GenAI-Bench** was chosen as one of the key benchmarks to showcase Imagen3's superior prompt-image alignment. Kudos to Google for this achievement! [[Paper](https://arxiv.org/abs/2408.07009)]
@@ -52,6 +53,8 @@ VQAScore significantly outperforms previous metrics such as CLIPScore and PickSc
 | LLaVA-Video | | :heavy_check_mark: | llava-video-7b, llava-video-72B |
 | Tarsier | | :heavy_check_mark: | tarsier-recap-7b, tarsier2-7b |
 | Perception-LM | | :heavy_check_mark: | perception-lm-1b, perception-lm-3b, perception-lm-8b |
+| Qwen3-VL | :heavy_check_mark: | :heavy_check_mark: | qwen3-vl-235b, qwen3-vl-235b-thinking |
+| Qwen3-Omni | :heavy_check_mark: | :heavy_check_mark: | qwen3-omni-30b-captioner, qwen3-omni-30b, qwen3-omni-30b-thinking |
 ---
 ### ITMScore
 | Model Family Name | Image | Video | Models |
@@ -185,6 +188,8 @@ We currently support running VQAScore with CLIP-FlanT5, LLaVA-1.5, and InstructB
 gpt4o_score = t2v_metrics.VQAScore(model='gpt-4o', api_key="YOUR_API_KEY") # Using OpenAI Key
 gemini25_score = t2v_metrics.VQAScore(model='gemini-2.5-pro', api_key="YOUR_API_KEY") # This is using your Gemini API key, which is the recommended method. If you would like to use your Vertex AI project, please make a request on Github.
 qwen25vl_score = t2v_metrics.VQAScore(model='qwen2.5-vl-7b')
+qwen3vl_score = t2v_metrics.VQAScore(model='qwen3-vl-235b') 
+qwen3omni_score = t2v_metrics.VQAScore(model='qwen3-omni-30b') # Supports audio!
 internvl3_score = t2v_metrics.VQAScore(model='internvl3-8b')
 ```
 You can check all supported models by running the below commands:
@@ -301,6 +306,32 @@ The generate method for CLIP-FlanT5 may require downgrading to 4.36.1:
 ```
 pip install transformers==4.36.1
 ```
+
+### Audio-Visual-Text Alignment and Generation
+
+Qwen3-Omni uniquely supports multimodal inputs including audio:
+```python
+import t2v_metrics
+
+qwen3omni_score = t2v_metrics.VQAScore(model='qwen3-omni-30b')
+
+# Evaluate image + audio + text alignment
+image = "images/concert.png"
+audio = "audio/applause.wav"
+text = "a concert with enthusiastic audience"
+
+# Pass audio via audio_paths parameter
+score = qwen3omni_score(images=[image], texts=[text], audio_paths=[audio])
+
+# Generate multimodal responses
+response = qwen3omni_score.model.generate(
+    images=[image], 
+    texts=["What can you see and hear?"],
+    audio_paths=[audio],
+    speaker="Ethan"  # Voice for audio generation
+)
+```
+
 ### Implementing your own scoring metric
 You can easily implement your own scoring metric. For example, if you have a VQA model that you believe is more effective, you can incorporate it into the directory at [t2v_metrics/models/vqascore_models](t2v_metrics/models/vqascore_models/). For guidance, please refer to our example implementations of [LLaVA-1.5](t2v_metrics/models/vqascore_models/llava_model.py) and [InstructBLIP](t2v_metrics/models/vqascore_models/instructblip_model.py) as starting points.
 

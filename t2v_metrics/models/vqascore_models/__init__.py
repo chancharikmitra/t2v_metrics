@@ -13,6 +13,8 @@ from .llama32_model import LLAMA_32_VISION_MODELS, LLaMA32VisionModel
 from .molmo_model import MOLMO_MODELS, MOLMOVisionModel
 from .gemini_model import GEMINI_MODELS, GeminiModel
 from .qwen2vl_model import QWEN2_VL_MODELS, Qwen2VLModel
+from .qwen3vl_model import QWEN3_VL_MODELS, Qwen3VLModel
+from .qwen3omni_model import QWEN3_OMNI_MODELS, Qwen3OmniModel
 from .llavavideo_model import LLAVA_VIDEO_MODELS, LLaVAVideoModel
 from .tarsier_model import TARSIER_MODELS, TarsierModel
 from .perceptionlm_model import PERCEPTION_LM_MODELS, PerceptionLMModel
@@ -35,6 +37,8 @@ ALL_VQA_MODELS = [
     MOLMO_MODELS,
     GEMINI_MODELS,
     QWEN2_VL_MODELS,
+    QWEN3_VL_MODELS,
+    QWEN3_OMNI_MODELS,
     LLAVA_VIDEO_MODELS,
     TARSIER_MODELS,
     PERCEPTION_LM_MODELS
@@ -76,6 +80,10 @@ def get_vqascore_model(model_name, device='cuda', cache_dir=HF_CACHE_DIR, **kwar
         return GeminiModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
     elif model_name in QWEN2_VL_MODELS:
         return Qwen2VLModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
+    elif model_name in QWEN3_VL_MODELS:
+        return Qwen3VLModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
+    elif model_name in QWEN3_OMNI_MODELS:
+        return Qwen3OmniModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
     elif model_name in LLAVA_VIDEO_MODELS:
         return LLaVAVideoModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
     elif model_name in TARSIER_MODELS:

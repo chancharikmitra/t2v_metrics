@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "t2v_metrics"
-version = "3.0"
+version = "2.1"
 description = "Evaluating Text-to-Visual Generation with Image-to-Text Generation."
 authors = [
     {name="Zhiqiu Lin", email="zl279@cornell.edu"},
@@ -34,7 +34,7 @@ dependencies = [
     "pandas>=2.1.4",
     "scipy>=1.11.4",
     "sentencepiece>=0.1.99",
-    "transformers==4.49.0",
+    "transformers",
     "datasets>=2.15.0",
     "tokenizers",
     "omegaconf",
@@ -80,7 +80,7 @@ dependencies = [
     "psutil==5.9.5",
     "soundfile==0.12.1",
     "termcolor==2.4.0",
-    "qwen-vl-utils",
+    "qwen-vl-utils[decord]",
     "flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.5.8/flash_attn-2.5.8+cu122torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl",
     "func_timeout",
     "timm>=1.0.15",
