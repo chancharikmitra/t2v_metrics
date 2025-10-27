@@ -1,9 +1,9 @@
 from .clip_t5_model import CLIP_T5_MODELS, CLIPT5Model
 from .llava_model import LLAVA_MODELS, LLaVAModel
 from .llava16_model import LLAVA16_MODELS, LLaVA16Model
-from .instructblip_model import InstructBLIP_MODELS, InstructBLIPModel
+# from .instructblip_model import InstructBLIP_MODELS, InstructBLIPModel
 from .gpt4v_model import GPT4V_MODELS, GPT4VModel
-from .llavaov_model import LLAVA_OV_MODELS, LLaVAOneVisionModel
+# from .llavaov_model import LLAVA_OV_MODELS, LLaVAOneVisionModel
 from .mplug_model import MPLUG_OWL3_MODELS, mPLUGOwl3Model
 from .paligemma_model import PALIGEMMA_MODELS, PaliGemmaModel
 from .internvl_model import INTERNVL2_MODELS, InternVL2Model
@@ -15,8 +15,8 @@ from .gemini_model import GEMINI_MODELS, GeminiModel
 from .qwen2vl_model import QWEN2_VL_MODELS, Qwen2VLModel
 from .qwen3vl_model import QWEN3_VL_MODELS, Qwen3VLModel
 from .qwen3omni_model import QWEN3_OMNI_MODELS, Qwen3OmniModel
-from .llavavideo_model import LLAVA_VIDEO_MODELS, LLaVAVideoModel
-from .tarsier_model import TARSIER_MODELS, TarsierModel
+# from .llavavideo_model import LLAVA_VIDEO_MODELS, LLaVAVideoModel
+# from .tarsier_model import TARSIER_MODELS, TarsierModel
 from .perceptionlm_model import PERCEPTION_LM_MODELS, PerceptionLMModel
 
 from ...constants import HF_CACHE_DIR
@@ -25,9 +25,9 @@ ALL_VQA_MODELS = [
     CLIP_T5_MODELS,
     LLAVA_MODELS,
     LLAVA16_MODELS,
-    InstructBLIP_MODELS,
+    # InstructBLIP_MODELS,
     GPT4V_MODELS,
-    LLAVA_OV_MODELS,
+    # LLAVA_OV_MODELS,
     MPLUG_OWL3_MODELS,
     PALIGEMMA_MODELS,
     INTERNVL2_MODELS,
@@ -39,8 +39,8 @@ ALL_VQA_MODELS = [
     QWEN2_VL_MODELS,
     QWEN3_VL_MODELS,
     QWEN3_OMNI_MODELS,
-    LLAVA_VIDEO_MODELS,
-    TARSIER_MODELS,
+    # LLAVA_VIDEO_MODELS,
+    # TARSIER_MODELS,
     PERCEPTION_LM_MODELS
 ]
 
@@ -56,12 +56,12 @@ def get_vqascore_model(model_name, device='cuda', cache_dir=HF_CACHE_DIR, **kwar
         return LLaVAModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
     elif model_name in LLAVA16_MODELS:
         return LLaVA16Model(model_name, device=device, cache_dir=cache_dir, **kwargs)
-    elif model_name in InstructBLIP_MODELS:
-        return InstructBLIPModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
+    # elif model_name in InstructBLIP_MODELS:
+    #     return InstructBLIPModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
     elif model_name in GPT4V_MODELS:
         return GPT4VModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
-    elif model_name in LLAVA_OV_MODELS:
-        return LLaVAOneVisionModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
+    # elif model_name in LLAVA_OV_MODELS:
+    #     return LLaVAOneVisionModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
     elif model_name in MPLUG_OWL3_MODELS:
         return mPLUGOwl3Model(model_name, device=device, cache_dir=cache_dir, **kwargs)
     elif model_name in PALIGEMMA_MODELS:
@@ -84,10 +84,10 @@ def get_vqascore_model(model_name, device='cuda', cache_dir=HF_CACHE_DIR, **kwar
         return Qwen3VLModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
     elif model_name in QWEN3_OMNI_MODELS:
         return Qwen3OmniModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
-    elif model_name in LLAVA_VIDEO_MODELS:
-        return LLaVAVideoModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
-    elif model_name in TARSIER_MODELS:
-        return TarsierModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
+    # elif model_name in LLAVA_VIDEO_MODELS:
+    #     return LLaVAVideoModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
+    # elif model_name in TARSIER_MODELS:
+    #     return TarsierModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
     elif model_name in PERCEPTION_LM_MODELS:
         return PerceptionLMModel(model_name, device=device, cache_dir=cache_dir, **kwargs)
     else:

@@ -81,6 +81,7 @@ dependencies = [
     "soundfile==0.12.1",
     "termcolor==2.4.0",
     "qwen-vl-utils[decord]",
+    "qwen-omni-utils[decord]",
     "flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.5.8/flash_attn-2.5.8+cu122torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl",
     "func_timeout",
     "timm>=1.0.15",
