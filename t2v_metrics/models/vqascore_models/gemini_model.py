@@ -23,6 +23,7 @@ GEMINI_MODELS = {
     'gemini-1.5-flash': {},
     'gemini-2.5-flash': {},
     'gemini-2.5-pro': {},
+    'gemini-2.5-pro-preview-03-25': {}
 }
 
 def encode_image(image_path):
