@@ -331,14 +331,16 @@ class Qwen3VLModel(VQAScoreModel):
         
         return torch.tensor(lm_probs)
 
-
+    
     def forward_with_trace(self,
                     images: List[str],
                     texts: List[str],
                     fps=None,
                     question_template: str = "Does this image show \"{}\"?",
                     answer_template: str = "Yes",
-                    max_new_tokens: int = 1) -> Tuple[torch.Tensor, List[Dict]]:
+                    max_new_tokens: int = 1,
+                    score_position: str = "end",
+                    score_after_text: Optional[str] = None) -> Tuple[torch.Tensor, List[Dict]]:
         """
         Calculate alignment scores with detailed trace information for debugging.
         
@@ -349,11 +351,21 @@ class Qwen3VLModel(VQAScoreModel):
             question_template: Template for formatting the question
             answer_template: Expected answer (default "Yes")
             max_new_tokens: Maximum number of new tokens to generate
-            
+            score_position: Where to extract the score from:
+                - "end": Score the last n tokens (default, original behavior)
+                - "start": Score the first n tokens of the generation
+                - "after_text": Score tokens immediately after score_after_text appears
+            score_after_text: Text to search for when score_position="after_text".
+                The answer tokens are expected immediately after this text.
+                Example: "The answer is:" to find "Yes" in "{critique} The answer is: Yes"
+                
         Returns:
             Tuple of (scores tensor, list of trace dictionaries)
         """
         assert len(images) == len(texts), "Number of images/videos and texts must match"
+        
+        if score_position == "after_text" and score_after_text is None:
+            raise ValueError("score_after_text must be provided when score_position='after_text'")
         
         questions = [question_template.format(text) for text in texts]
         answers = [answer_template.format(text) for text in texts]
@@ -367,6 +379,9 @@ class Qwen3VLModel(VQAScoreModel):
             # print(f"Sample {idx + 1}/{len(images)}")
             # print(f"Path: {images[idx]}")
             # print(f"Text: {texts[idx]}")
+            # print(f"Score position: {score_position}")
+            # if score_after_text:
+            #     print(f"Score after text: '{score_after_text}'")
             
             messages = [
                 {
@@ -405,78 +420,154 @@ class Qwen3VLModel(VQAScoreModel):
             # print(f"\nGenerated output:")
             # print(f"  {generated_text}")
             
-            # CHECK: Make sure last generated token is not a special token
-            last_token_id = generated_ids[-1].item()
-            special_token_ids = [
-                self.processor.tokenizer.eos_token_id,
-                self.processor.tokenizer.bos_token_id,
-                self.processor.tokenizer.pad_token_id
-            ]
+            # Determine the starting position for scoring based on score_position
+            if score_position == "start":
+                # Score from the beginning of generation
+                score_start_idx = 0
+                # print(f"\nScoring from start (index 0)")
+                
+            elif score_position == "after_text":
+                # Find the position after the specified text
+                search_text = score_after_text.strip()
+                
+                # Find in the generated text
+                text_pos = generated_text.find(search_text)
+                if text_pos == -1:
+                    # Try case-insensitive search
+                    text_pos = generated_text.lower().find(search_text.lower())
+                
+                if text_pos == -1:
+                    raise ValueError(
+                        f"Could not find '{score_after_text}' in generated text: '{generated_text}'"
+                    )
+                
+                # print(f"\nFound '{search_text}' at character position {text_pos}")
+                
+                # Find the token index corresponding to the end of search_text
+                # We need to find which token index corresponds to the character position
+                score_start_idx = 0
+                
+                for token_idx in range(len(generated_ids)):
+                    token_text = self.processor.tokenizer.decode(
+                        generated_ids[:token_idx + 1], 
+                        skip_special_tokens=True
+                    )
+                    # Check if we've passed the end of the search text
+                    if len(token_text) >= text_pos + len(search_text):
+                        score_start_idx = token_idx + 1
+                        break
+                
+                # print(f"Token index after marker: {score_start_idx}")
+                
+                # Skip any whitespace tokens after the marker
+                while score_start_idx < len(generated_ids):
+                    token_text = self.processor.tokenizer.decode(
+                        [generated_ids[score_start_idx]], 
+                        skip_special_tokens=True
+                    )
+                    if token_text.strip():  # Non-whitespace token found
+                        break
+                    # print(f"Skipping whitespace token at index {score_start_idx}: '{token_text}'")
+                    score_start_idx += 1
+                
+                # print(f"Final score_start_idx after skipping whitespace: {score_start_idx}")
+                    
+            else:  # score_position == "end" (default)
+                # Original behavior: score from the end
+                # CHECK: Make sure last generated token is not a special token
+                last_token_id = generated_ids[-1].item()
+                special_token_ids = [
+                    self.processor.tokenizer.eos_token_id,
+                    self.processor.tokenizer.bos_token_id,
+                    self.processor.tokenizer.pad_token_id
+                ]
+                
+                if last_token_id in special_token_ids:
+                    special_name = "EOS" if last_token_id == self.processor.tokenizer.eos_token_id else \
+                                "BOS" if last_token_id == self.processor.tokenizer.bos_token_id else "PAD"
+                    # print(f"  Note: Last token is {special_name}, adjusting scoring")
+                    offset = 1
+                else:
+                    offset = 0
+                
+                score_start_idx = len(generated_ids) - n_answer_tokens - offset
+                # print(f"\nScoring from end (offset={offset}, score_start_idx={score_start_idx})")
             
-            if last_token_id in special_token_ids:
-                special_name = "EOS" if last_token_id == self.processor.tokenizer.eos_token_id else \
-                            "BOS" if last_token_id == self.processor.tokenizer.bos_token_id else "PAD"
-                # print(f"  Note: Last token is {special_name}, adjusting scoring")
-                # Remove the special token from consideration
-                n_answer_tokens = min(n_answer_tokens, len(outputs.scores) - 1)
-                if n_answer_tokens <= 0:
-                    raise ValueError("No content tokens to score after removing special tokens")
-            
-            # Check if we have enough tokens to score
-            if len(outputs.scores) < n_answer_tokens:
-                print(f"  Warning: Generated {len(outputs.scores)} tokens but need {n_answer_tokens}, adjusting")
-                n_answer_tokens = len(outputs.scores)
+            # Validate we have enough tokens
+            if score_start_idx < 0:
+                score_start_idx = 0
+            if score_start_idx + n_answer_tokens > len(outputs.scores):
+                available = len(outputs.scores) - score_start_idx
+                print(f"  Warning: Only {available} tokens available at position, need {n_answer_tokens}, adjusting")
+                n_answer_tokens = available
                 answer_token_ids = answer_token_ids[:n_answer_tokens]
             
-            # Calculate offset to exclude special tokens if needed
-            offset = 1 if last_token_id in special_token_ids else 0
-
-            # Get the indices and text of the scored tokens (excluding special token if present)
-            if offset > 0:
-                scored_token_ids = generated_ids[-(n_answer_tokens + offset):-offset].tolist()
-            else:
-                scored_token_ids = generated_ids[-(n_answer_tokens):].tolist()
-
-            scored_indices = list(range(len(generated_ids) - n_answer_tokens - offset, len(generated_ids) - offset))
+            if n_answer_tokens <= 0:
+                raise ValueError("No tokens available to score at the specified position")
+            
+            # Get the indices and text of the scored tokens
+            scored_indices = list(range(score_start_idx, score_start_idx + n_answer_tokens))
+            scored_token_ids = generated_ids[score_start_idx:score_start_idx + n_answer_tokens].tolist()
             scored_tokens_text = self.processor.tokenizer.decode(scored_token_ids, skip_special_tokens=True)
             
             # print(f"\nScoring token(s): '{scored_tokens_text}'")
             # print(f"  Token indices in generated sequence: {scored_indices}")
             
-            # Extract probability for last n_answer_tokens
+            # Extract probability for the answer tokens at the determined position
             joint_prob = 1.0
+            token_probs_detail = []
+            
             for i in range(n_answer_tokens):
-                position = -(n_answer_tokens - i + offset)  # Adjusted for offset
-                token_logits = outputs.scores[position][0]
+                score_idx = score_start_idx + i
+                token_logits = outputs.scores[score_idx][0]
                 token_probs_dist = torch.nn.functional.softmax(token_logits, dim=-1)
                 
                 expected_token_id = answer_token_ids[i]
                 token_prob = token_probs_dist[expected_token_id].item()
                 joint_prob *= token_prob
                 
-                # Show top 5 alternatives at this position
-                # print(f"\n  Position {position} in outputs.scores (token index {scored_indices[i]} in sequence):")
+                # Get top 5 alternatives at this position
+                top_probs, top_indices = torch.topk(token_probs_dist, 5)
+                
+                # print(f"\n  Position {score_idx} in outputs.scores (token index {scored_indices[i]} in sequence):")
                 # print(f"    Answer Template token ID: {expected_token_id}")
                 # print(f"    Answer Template token text: '{self.processor.tokenizer.decode([expected_token_id])}'")
                 # print(f"    P(Answer Template): {token_prob:.6f}")
                 # print(f"\n    Top 5 alternatives:")
                 
-                top_probs, top_indices = torch.topk(token_probs_dist, 5)
+                alternatives = []
                 for rank, (prob, token_id) in enumerate(zip(top_probs, top_indices), 1):
                     token_id_int = token_id.item()
                     token_text = self.processor.tokenizer.decode([token_id_int])
                     is_expected = "✓" if token_id_int == expected_token_id else " "
                     # print(f"      {rank}. ID={token_id_int:6d} | P={prob.item():.6f} | Text='{token_text}' {is_expected}")
+                    
+                    alternatives.append({
+                        'token_id': token_id_int,
+                        'token_text': token_text,
+                        'probability': prob.item()
+                    })
+                
+                token_probs_detail.append({
+                    'position': score_idx,
+                    'expected_token_id': expected_token_id,
+                    'expected_token_text': self.processor.tokenizer.decode([expected_token_id]),
+                    'probability': token_prob,
+                    'top_alternatives': alternatives
+                })
             
             # print(f"\nJoint probability: {joint_prob:.6f}")
             
-            # Store minimal trace info
+            # Store trace info
             trace = {
                 'generated_text': generated_text,
                 'generated_length': len(generated_ids),
+                'score_position': score_position,
+                'score_start_idx': score_start_idx,
                 'scored_indices': scored_indices,
                 'scored_tokens_text': scored_tokens_text,
-                'probability': joint_prob
+                'probability': joint_prob,
+                'token_details': token_probs_detail
             }
             
             lm_probs.append(joint_prob)
