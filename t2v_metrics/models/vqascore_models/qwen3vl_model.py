@@ -333,8 +333,9 @@ class Qwen3VLModel(VQAScoreModel):
         
         return torch.tensor(lm_probs)
 
-
+    
     def forward_with_trace(self,
+<<<<<<< HEAD
                 images: List[str],
                 texts: List[str],
                 fps=None,
@@ -342,6 +343,16 @@ class Qwen3VLModel(VQAScoreModel):
                 answer_template: str = "Yes",
                 max_new_tokens: int = 1,
                 score_position: str = "end") -> Tuple[torch.Tensor, List[Dict]]:
+=======
+                    images: List[str],
+                    texts: List[str],
+                    fps=None,
+                    question_template: str = "Does this image show \"{}\"?",
+                    answer_template: str = "Yes",
+                    max_new_tokens: int = 1,
+                    score_position: str = "end",
+                    score_after_text: Optional[str] = None) -> Tuple[torch.Tensor, List[Dict]]:
+>>>>>>> 86b5617b02e8e97d9219edc05710ef64289cc72d
         """
         Calculate alignment scores with detailed trace information for debugging.
         
@@ -353,14 +364,26 @@ class Qwen3VLModel(VQAScoreModel):
             answer_template: Expected answer (default "Yes")
             max_new_tokens: Maximum number of new tokens to generate
             score_position: Where to extract the score from:
+<<<<<<< HEAD
                 - "start": Score the first n tokens of the generation
                 - "end": Score the last n tokens (default, original behavior)
+=======
+                - "end": Score the last n tokens (default, original behavior)
+                - "start": Score the first n tokens of the generation
+                - "after_text": Score tokens immediately after score_after_text appears
+            score_after_text: Text to search for when score_position="after_text".
+                The answer tokens are expected immediately after this text.
+                Example: "The answer is:" to find "Yes" in "{critique} The answer is: Yes"
+>>>>>>> 86b5617b02e8e97d9219edc05710ef64289cc72d
                 
         Returns:
             Tuple of (scores tensor, list of trace dictionaries)
         """
         assert len(images) == len(texts), "Number of images/videos and texts must match"
         assert score_position in ("start", "end"), f"score_position must be 'start' or 'end', got '{score_position}'"
+        
+        if score_position == "after_text" and score_after_text is None:
+            raise ValueError("score_after_text must be provided when score_position='after_text'")
         
         questions = [question_template.format(text) for text in texts]
         answers = [answer_template.format(text) for text in texts]
@@ -370,6 +393,17 @@ class Qwen3VLModel(VQAScoreModel):
         traces = []
         
         for idx, (data, question, answer) in enumerate(zip(processed_data, questions, answers)):
+<<<<<<< HEAD
+=======
+            # print(f"\n{'='*60}")
+            # print(f"Sample {idx + 1}/{len(images)}")
+            # print(f"Path: {images[idx]}")
+            # print(f"Text: {texts[idx]}")
+            # print(f"Score position: {score_position}")
+            # if score_after_text:
+            #     print(f"Score after text: '{score_after_text}'")
+            
+>>>>>>> 86b5617b02e8e97d9219edc05710ef64289cc72d
             messages = [
                 {
                     "role": "user",
@@ -404,6 +438,7 @@ class Qwen3VLModel(VQAScoreModel):
             generated_ids = outputs.sequences[0][inputs.input_ids.shape[1]:]
             generated_text = self.processor.tokenizer.decode(generated_ids, skip_special_tokens=True)
             
+<<<<<<< HEAD
             # Determine scoring position and handle special tokens
             if score_position == "start":
                 # Score from the beginning of generation
@@ -413,6 +448,66 @@ class Qwen3VLModel(VQAScoreModel):
             else:  # score_position == "end"
                 # Original behavior: score from the end
                 # Check if last token is a special token
+=======
+            # print(f"\nGenerated output:")
+            # print(f"  {generated_text}")
+            
+            # Determine the starting position for scoring based on score_position
+            if score_position == "start":
+                # Score from the beginning of generation
+                score_start_idx = 0
+                # print(f"\nScoring from start (index 0)")
+                
+            elif score_position == "after_text":
+                # Find the position after the specified text
+                search_text = score_after_text.strip()
+                
+                # Find in the generated text
+                text_pos = generated_text.find(search_text)
+                if text_pos == -1:
+                    # Try case-insensitive search
+                    text_pos = generated_text.lower().find(search_text.lower())
+                
+                if text_pos == -1:
+                    raise ValueError(
+                        f"Could not find '{score_after_text}' in generated text: '{generated_text}'"
+                    )
+                
+                # print(f"\nFound '{search_text}' at character position {text_pos}")
+                
+                # Find the token index corresponding to the end of search_text
+                # We need to find which token index corresponds to the character position
+                score_start_idx = 0
+                
+                for token_idx in range(len(generated_ids)):
+                    token_text = self.processor.tokenizer.decode(
+                        generated_ids[:token_idx + 1], 
+                        skip_special_tokens=True
+                    )
+                    # Check if we've passed the end of the search text
+                    if len(token_text) >= text_pos + len(search_text):
+                        score_start_idx = token_idx + 1
+                        break
+                
+                # print(f"Token index after marker: {score_start_idx}")
+                
+                # Skip any whitespace tokens after the marker
+                while score_start_idx < len(generated_ids):
+                    token_text = self.processor.tokenizer.decode(
+                        [generated_ids[score_start_idx]], 
+                        skip_special_tokens=True
+                    )
+                    if token_text.strip():  # Non-whitespace token found
+                        break
+                    # print(f"Skipping whitespace token at index {score_start_idx}: '{token_text}'")
+                    score_start_idx += 1
+                
+                # print(f"Final score_start_idx after skipping whitespace: {score_start_idx}")
+                    
+            else:  # score_position == "end" (default)
+                # Original behavior: score from the end
+                # CHECK: Make sure last generated token is not a special token
+>>>>>>> 86b5617b02e8e97d9219edc05710ef64289cc72d
                 last_token_id = generated_ids[-1].item()
                 special_token_ids = [
                     self.processor.tokenizer.eos_token_id,
@@ -420,21 +515,49 @@ class Qwen3VLModel(VQAScoreModel):
                     self.processor.tokenizer.pad_token_id
                 ]
                 
+<<<<<<< HEAD
                 offset = 1 if last_token_id in special_token_ids else 0
                 score_start_idx = len(generated_ids) - n_answer_tokens - offset
+=======
+                if last_token_id in special_token_ids:
+                    special_name = "EOS" if last_token_id == self.processor.tokenizer.eos_token_id else \
+                                "BOS" if last_token_id == self.processor.tokenizer.bos_token_id else "PAD"
+                    # print(f"  Note: Last token is {special_name}, adjusting scoring")
+                    offset = 1
+                else:
+                    offset = 0
+                
+                score_start_idx = len(generated_ids) - n_answer_tokens - offset
+                # print(f"\nScoring from end (offset={offset}, score_start_idx={score_start_idx})")
+>>>>>>> 86b5617b02e8e97d9219edc05710ef64289cc72d
             
             # Validate we have enough tokens
             if score_start_idx < 0:
                 score_start_idx = 0
+<<<<<<< HEAD
             
             available_tokens = len(outputs.scores) - score_start_idx
             if available_tokens < n_answer_tokens:
                 print(f"  Warning: Only {available_tokens} tokens available at position, need {n_answer_tokens}, adjusting")
                 n_answer_tokens = available_tokens
+=======
+            if score_start_idx + n_answer_tokens > len(outputs.scores):
+                available = len(outputs.scores) - score_start_idx
+                print(f"  Warning: Only {available} tokens available at position, need {n_answer_tokens}, adjusting")
+                n_answer_tokens = available
+>>>>>>> 86b5617b02e8e97d9219edc05710ef64289cc72d
                 answer_token_ids = answer_token_ids[:n_answer_tokens]
             
             if n_answer_tokens <= 0:
                 raise ValueError("No tokens available to score at the specified position")
+<<<<<<< HEAD
+=======
+            
+            # Get the indices and text of the scored tokens
+            scored_indices = list(range(score_start_idx, score_start_idx + n_answer_tokens))
+            scored_token_ids = generated_ids[score_start_idx:score_start_idx + n_answer_tokens].tolist()
+            scored_tokens_text = self.processor.tokenizer.decode(scored_token_ids, skip_special_tokens=True)
+>>>>>>> 86b5617b02e8e97d9219edc05710ef64289cc72d
             
             # Get the indices and text of the scored tokens
             scored_indices = list(range(score_start_idx, score_start_idx + n_answer_tokens))
@@ -443,7 +566,11 @@ class Qwen3VLModel(VQAScoreModel):
             
             # Extract probability for the answer tokens at the determined position
             joint_prob = 1.0
+<<<<<<< HEAD
             token_details = []
+=======
+            token_probs_detail = []
+>>>>>>> 86b5617b02e8e97d9219edc05710ef64289cc72d
             
             for i in range(n_answer_tokens):
                 score_idx = score_start_idx + i
@@ -457,17 +584,37 @@ class Qwen3VLModel(VQAScoreModel):
                 # Get top 5 alternatives at this position
                 top_probs, top_indices = torch.topk(token_probs_dist, 5)
                 
+<<<<<<< HEAD
                 alternatives = []
                 for prob, token_id in zip(top_probs, top_indices):
                     token_id_int = token_id.item()
                     token_text = self.processor.tokenizer.decode([token_id_int])
+=======
+                # print(f"\n  Position {score_idx} in outputs.scores (token index {scored_indices[i]} in sequence):")
+                # print(f"    Answer Template token ID: {expected_token_id}")
+                # print(f"    Answer Template token text: '{self.processor.tokenizer.decode([expected_token_id])}'")
+                # print(f"    P(Answer Template): {token_prob:.6f}")
+                # print(f"\n    Top 5 alternatives:")
+                
+                alternatives = []
+                for rank, (prob, token_id) in enumerate(zip(top_probs, top_indices), 1):
+                    token_id_int = token_id.item()
+                    token_text = self.processor.tokenizer.decode([token_id_int])
+                    is_expected = "✓" if token_id_int == expected_token_id else " "
+                    # print(f"      {rank}. ID={token_id_int:6d} | P={prob.item():.6f} | Text='{token_text}' {is_expected}")
+                    
+>>>>>>> 86b5617b02e8e97d9219edc05710ef64289cc72d
                     alternatives.append({
                         'token_id': token_id_int,
                         'token_text': token_text,
                         'probability': prob.item()
                     })
                 
+<<<<<<< HEAD
                 token_details.append({
+=======
+                token_probs_detail.append({
+>>>>>>> 86b5617b02e8e97d9219edc05710ef64289cc72d
                     'position': score_idx,
                     'expected_token_id': expected_token_id,
                     'expected_token_text': self.processor.tokenizer.decode([expected_token_id]),
@@ -475,8 +622,12 @@ class Qwen3VLModel(VQAScoreModel):
                     'top_alternatives': alternatives
                 })
             
+<<<<<<< HEAD
             # Geometric mean probability
             geometric_mean_prob = joint_prob ** (1.0 / n_answer_tokens)
+=======
+            # print(f"\nJoint probability: {joint_prob:.6f}")
+>>>>>>> 86b5617b02e8e97d9219edc05710ef64289cc72d
             
             # Store trace info
             trace = {
@@ -486,8 +637,13 @@ class Qwen3VLModel(VQAScoreModel):
                 'score_start_idx': score_start_idx,
                 'scored_indices': scored_indices,
                 'scored_tokens_text': scored_tokens_text,
+<<<<<<< HEAD
                 'probability': geometric_mean_prob,
                 'token_details': token_details
+=======
+                'probability': joint_prob,
+                'token_details': token_probs_detail
+>>>>>>> 86b5617b02e8e97d9219edc05710ef64289cc72d
             }
             
             lm_probs.append(geometric_mean_prob)

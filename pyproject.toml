@@ -18,7 +18,10 @@ classifiers = [
 ]
 dependencies = [
     "torch==2.6.0",
+<<<<<<< HEAD
     #"torchvision==0.20.1",
+=======
+>>>>>>> 86b5617b02e8e97d9219edc05710ef64289cc72d
     "torchvision==0.21.0",
     "torchaudio==2.6.0",
     "xformers",
