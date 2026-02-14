@@ -233,7 +233,8 @@ class GeminiModel(VQAScoreModel):
                 texts: List[str],
                 question_template: str = default_question_template,
                 answer_template: str = default_answer_template,
-                num_frames: int = 4) -> torch.Tensor:
+                num_frames: int = 4,
+                fps = None) -> torch.Tensor:
 
         assert len(paths) == len(texts), "Number of paths and texts must match"
 
@@ -326,7 +327,8 @@ class GeminiModel(VQAScoreModel):
             images: List[str],
             texts: List[str],
             num_frames: int = 5,
-            max_new_tokens: int = 1024) -> List[str]:
+            max_new_tokens: int = 1024,
+            fps=None) -> List[str]:
         assert len(images) == len(texts), "Number of paths and texts must match"
         # self.load_model()
         

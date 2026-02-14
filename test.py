@@ -6,7 +6,7 @@ print("Testing Generalized VQAScore Implementation")
 print("="*80)
 
 # Initialize the model
-qwen_score = t2v_metrics.VQAScore(model='gemini-2.5-pro-preview-03-25', api_key='AIzaSyALyEIg_HnZjKtxoWL7VFIx_bXIKggJMB4')
+qwen_score = t2v_metrics.VQAScore(model='qwen3-vl-omni')
 
 # Test cases
 print("\n" + "="*80)

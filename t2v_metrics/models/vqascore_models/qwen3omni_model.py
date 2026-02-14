@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from PIL import Image
-from typing import List, Union, Optional
+from typing import  List, Union, Tuple, Dict, Optional
 import soundfile as sf
 from transformers import Qwen3OmniMoeForConditionalGeneration, Qwen3OmniMoeProcessor
 from qwen_omni_utils import process_mm_info
@@ -110,14 +110,15 @@ class Qwen3OmniModel(VQAScoreModel):
         return processed_data
 
     def forward(self,
-                paths: List[str],
-                texts: List[str],
-                audio_paths: Optional[List[str]] = None,
-                fps=None,
-                question_template: str = "Does this show \"{}\"?",
-                answer_template: str = "Yes") -> torch.Tensor:
+            paths: List[str],
+            texts: List[str],
+            audio_paths: Optional[List[str]] = None,
+            fps=None,
+            question_template: str = "Does this show \"{}\"?",
+            answer_template: str = "Yes",
+            max_new_tokens: int = 1) -> torch.Tensor:
         """
-        Calculate alignment scores using the probability of the answer token.
+        Calculate alignment scores using the probability of the answer token(s).
         
         Args:
             paths: List of image/video file paths
@@ -126,9 +127,10 @@ class Qwen3OmniModel(VQAScoreModel):
             fps: Frames per second (unused in Qwen3-Omni)
             question_template: Template for formatting the question
             answer_template: Expected answer (default "Yes")
+            max_new_tokens: Maximum number of new tokens to generate
             
         Returns:
-            Tensor of probabilities for the answer token
+            Tensor of probabilities for the answer token(s)
         """
         assert len(paths) == len(texts), "Number of paths and texts must match"
         
@@ -159,27 +161,228 @@ class Qwen3OmniModel(VQAScoreModel):
             )
             inputs = inputs.to(self.device).to(self.model.dtype)
             
+            # Tokenize the answer template
+            answer_token_ids = self.processor.tokenizer.encode(answer, add_special_tokens=False)
+            n_answer_tokens = len(answer_token_ids)
+            
             with torch.inference_mode():
                 outputs = self.model.generate(
                     **inputs,
-                    max_new_tokens=1,
+                    max_new_tokens=max_new_tokens,
                     do_sample=False,
                     output_scores=True,
                     return_dict_in_generate=True,
                     thinker_return_dict_in_generate=True,
                     use_audio_in_video=self.use_audio_in_video
                 )
-
-            # Extract probability of the answer token
-            scores = outputs.scores[0]
-            probs = torch.nn.functional.softmax(scores, dim=-1)
             
-            # Get token ID for the answer
-            ans_token_id = self.processor.tokenizer.encode(answer, add_special_tokens=False)[0]
-            lm_prob = probs[0, ans_token_id].item()
-            lm_probs.append(lm_prob)
+            # Extract generated tokens
+            generated_ids = outputs.sequences[0][inputs.input_ids.shape[1]:]
+            
+            # CHECK: Make sure last generated token is not a special token
+            last_token_id = generated_ids[-1].item()
+            special_token_ids = [
+                self.processor.tokenizer.eos_token_id,
+                self.processor.tokenizer.bos_token_id,
+                self.processor.tokenizer.pad_token_id
+            ]
+            
+            offset = 0
+            if last_token_id in special_token_ids:
+                # Remove the special token from consideration
+                n_answer_tokens = min(n_answer_tokens, len(outputs.scores) - 1)
+                offset = 1
+                if n_answer_tokens <= 0:
+                    raise ValueError("No content tokens to score after removing special tokens")
+            
+            # Check if we have enough tokens to score
+            if len(outputs.scores) < n_answer_tokens:
+                print(f"  Warning: Generated {len(outputs.scores)} tokens but need {n_answer_tokens}, adjusting")
+                n_answer_tokens = len(outputs.scores)
+                answer_token_ids = answer_token_ids[:n_answer_tokens]
+            
+            # Extract probability for last n_answer_tokens (geometric mean)
+            joint_prob = 1.0
+            for i in range(n_answer_tokens):
+                position = -(n_answer_tokens - i + offset)
+                token_logits = outputs.scores[position][0]
+                token_probs_dist = torch.nn.functional.softmax(token_logits, dim=-1)
+                
+                expected_token_id = answer_token_ids[i]
+                token_prob = token_probs_dist[expected_token_id].item()
+                joint_prob *= token_prob
+            
+            geometric_mean_prob = joint_prob ** (1.0 / n_answer_tokens)
+            lm_probs.append(geometric_mean_prob)
             
         return torch.tensor(lm_probs)
+
+
+    def forward_with_trace(self,
+                        paths: List[str],
+                        texts: List[str],
+                        audio_paths: Optional[List[str]] = None,
+                        fps=None,
+                        question_template: str = "Does this show \"{}\"?",
+                        answer_template: str = "Yes",
+                        max_new_tokens: int = 1) -> Tuple[torch.Tensor, List[Dict]]:
+        """
+        Calculate alignment scores with detailed trace information for debugging.
+        
+        Args:
+            paths: List of image/video file paths
+            texts: List of text descriptions to check alignment with
+            audio_paths: Optional list of audio file paths
+            fps: Frames per second (unused in Qwen3-Omni)
+            question_template: Template for formatting the question
+            answer_template: Expected answer (default "Yes")
+            max_new_tokens: Maximum number of new tokens to generate
+            
+        Returns:
+            Tuple of (scores tensor, list of trace dictionaries)
+        """
+        assert len(paths) == len(texts), "Number of paths and texts must match"
+        
+        questions = [question_template.format(text) for text in texts]
+        answers = [answer_template.format(text) for text in texts]
+        processed_data = self.load_media(paths, audio_paths)
+        
+        lm_probs = []
+        traces = []
+        
+        for idx, (content, question, answer) in enumerate(zip(processed_data, questions, answers)):
+            print(f"\n{'='*60}")
+            print(f"Sample {idx + 1}/{len(paths)}")
+            print(f"Path: {paths[idx]}")
+            print(f"Text: {texts[idx]}")
+            
+            conversation = [
+                {
+                    "role": "user",
+                    "content": content + [{"type": "text", "text": question}]
+                }
+            ]
+            
+            # Prepare inputs
+            text = self.processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+            audios, images, videos = process_mm_info(conversation, use_audio_in_video=self.use_audio_in_video)
+            inputs = self.processor(
+                text=text,
+                audio=audios,
+                images=images,
+                videos=videos,
+                return_tensors="pt",
+                padding=True,
+                use_audio_in_video=self.use_audio_in_video
+            )
+            inputs = inputs.to(self.device).to(self.model.dtype)
+            
+            # Tokenize the answer template
+            answer_token_ids = self.processor.tokenizer.encode(answer, add_special_tokens=False)
+            n_answer_tokens = len(answer_token_ids)
+            
+            with torch.inference_mode():
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    output_scores=True,
+                    return_dict_in_generate=True,
+                    thinker_return_dict_in_generate=True,
+                    use_audio_in_video=self.use_audio_in_video
+                )
+            
+            # Extract generated tokens
+            generated_ids = outputs.sequences[0][inputs.input_ids.shape[1]:]
+            generated_text = self.processor.tokenizer.decode(generated_ids, skip_special_tokens=True)
+            
+            print(f"\nGenerated output:")
+            print(f"  {generated_text}")
+            
+            # CHECK: Make sure last generated token is not a special token
+            last_token_id = generated_ids[-1].item()
+            special_token_ids = [
+                self.processor.tokenizer.eos_token_id,
+                self.processor.tokenizer.bos_token_id,
+                self.processor.tokenizer.pad_token_id
+            ]
+            
+            if last_token_id in special_token_ids:
+                special_name = "EOS" if last_token_id == self.processor.tokenizer.eos_token_id else \
+                            "BOS" if last_token_id == self.processor.tokenizer.bos_token_id else "PAD"
+                print(f"  Note: Last token is {special_name}, adjusting scoring")
+                # Remove the special token from consideration
+                n_answer_tokens = min(n_answer_tokens, len(outputs.scores) - 1)
+                if n_answer_tokens <= 0:
+                    raise ValueError("No content tokens to score after removing special tokens")
+            
+            # Check if we have enough tokens to score
+            if len(outputs.scores) < n_answer_tokens:
+                print(f"  Warning: Generated {len(outputs.scores)} tokens but need {n_answer_tokens}, adjusting")
+                n_answer_tokens = len(outputs.scores)
+                answer_token_ids = answer_token_ids[:n_answer_tokens]
+            
+            # Calculate offset to exclude special tokens if needed
+            offset = 1 if last_token_id in special_token_ids else 0
+            
+            # Get the indices and text of the scored tokens (excluding special token if present)
+            if offset > 0:
+                scored_token_ids = generated_ids[-(n_answer_tokens + offset):-offset].tolist()
+            else:
+                scored_token_ids = generated_ids[-n_answer_tokens:].tolist()
+            
+            scored_indices = list(range(len(generated_ids) - n_answer_tokens - offset, len(generated_ids) - offset))
+            scored_tokens_text = self.processor.tokenizer.decode(scored_token_ids, skip_special_tokens=True)
+            
+            print(f"\nScoring token(s): '{scored_tokens_text}'")
+            print(f"  Token indices in generated sequence: {scored_indices}")
+            
+            # Extract probability for last n_answer_tokens
+            joint_prob = 1.0
+            for i in range(n_answer_tokens):
+                position = -(n_answer_tokens - i + offset)
+                token_logits = outputs.scores[position][0]
+                token_probs_dist = torch.nn.functional.softmax(token_logits, dim=-1)
+                
+                expected_token_id = answer_token_ids[i]
+                token_prob = token_probs_dist[expected_token_id].item()
+                joint_prob *= token_prob
+                
+                # Show top 5 alternatives at this position
+                print(f"\n  Position {position} in outputs.scores (token index {scored_indices[i]} in sequence):")
+                print(f"    Answer Template token ID: {expected_token_id}")
+                print(f"    Answer Template token text: '{self.processor.tokenizer.decode([expected_token_id])}'")
+                print(f"    P(Answer Template): {token_prob:.6f}")
+                print(f"\n    Top 5 alternatives:")
+                
+                top_probs, top_indices = torch.topk(token_probs_dist, 5)
+                for rank, (prob, token_id) in enumerate(zip(top_probs, top_indices), 1):
+                    token_id_int = token_id.item()
+                    token_text = self.processor.tokenizer.decode([token_id_int])
+                    is_expected = "✓" if token_id_int == expected_token_id else " "
+                    print(f"      {rank}. ID={token_id_int:6d} | P={prob.item():.6f} | Text='{token_text}' {is_expected}")
+            
+            geometric_mean_prob = joint_prob ** (1.0 / n_answer_tokens)
+            print(f"\nJoint probability: {joint_prob:.6f}")
+            print(f"Geometric mean probability: {geometric_mean_prob:.6f}")
+            
+            # Store minimal trace info
+            trace = {
+                'generated_text': generated_text,
+                'generated_length': len(generated_ids),
+                'scored_indices': scored_indices,
+                'scored_tokens_text': scored_tokens_text,
+                'joint_probability': joint_prob,
+                'geometric_mean_probability': geometric_mean_prob
+            }
+            
+            lm_probs.append(geometric_mean_prob)
+            traces.append(trace)
+        
+        print(f"\n{'='*60}")
+        print(f"Final scores: {lm_probs}")
+        
+        return torch.tensor(lm_probs), traces
     
     def generate(self,
                 images: List[str],
