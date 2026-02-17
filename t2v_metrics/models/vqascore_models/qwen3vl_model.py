@@ -223,7 +223,7 @@ class Qwen3VLModel(VQAScoreModel):
             # print(f"Sample {idx + 1}/{len(images)}")
             # print(f"Path: {images[idx]}")
             # print(f"Text: {texts[idx]}")
-            print(f"Question Input {question}")
+            
             messages = [
                 {
                     "role": "user",
@@ -338,7 +338,7 @@ class Qwen3VLModel(VQAScoreModel):
                 images: List[str],
                 texts: List[str],
                 fps=None,
-                question_template: str = "Does this image show \"{}\"?",
+                question_template: str = "{}",
                 answer_template: str = "Yes",
                 max_new_tokens: int = 1,
                 score_position: str = "end") -> Tuple[torch.Tensor, List[Dict]]:
@@ -373,6 +373,7 @@ class Qwen3VLModel(VQAScoreModel):
         traces = []
         
         for idx, (data, question, answer) in enumerate(zip(processed_data, questions, answers)):
+            print(f"Question Input {question}")
             messages = [
                 {
                     "role": "user",
