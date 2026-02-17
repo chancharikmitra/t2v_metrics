@@ -193,7 +193,7 @@ class Qwen3VLModel(VQAScoreModel):
         images: List[str],
         texts: List[str],
         fps=None,
-        question_template: str = "{} Please answer with only Yes or No.", #"Does this image show \"{}\"?",
+        question_template: str = "{}",# Please answer with only Yes or No.", #"Does this image show \"{}\"?",
         answer_template: str = "Yes",
         max_new_tokens: int = 1) -> torch.Tensor:
         """
