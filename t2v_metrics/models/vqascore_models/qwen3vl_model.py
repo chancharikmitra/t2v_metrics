@@ -373,7 +373,6 @@ class Qwen3VLModel(VQAScoreModel):
         traces = []
         
         for idx, (data, question, answer) in enumerate(zip(processed_data, questions, answers)):
-            print(f"Question Input {question}")
             messages = [
                 {
                     "role": "user",
