@@ -223,7 +223,7 @@ class Qwen3VLModel(VQAScoreModel):
             # print(f"Sample {idx + 1}/{len(images)}")
             # print(f"Path: {images[idx]}")
             # print(f"Text: {texts[idx]}")
-            
+            print(f"Question Input {question}")
             messages = [
                 {
                     "role": "user",
