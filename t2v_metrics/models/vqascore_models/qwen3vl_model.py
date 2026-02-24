@@ -149,7 +149,6 @@ class Qwen3VLModel(VQAScoreModel):
     def load_model(self):
         model_path = self.checkpoint
         
-        # Load model using AutoModelForImageTextToText for Qwen3-VL
         self.model = AutoModelForImageTextToText.from_pretrained(
             model_path,
             torch_dtype=self.model_info['model']['torch_dtype'],
@@ -167,48 +166,46 @@ class Qwen3VLModel(VQAScoreModel):
         processed_data = []
         
         for path in paths:
-            if path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv')):  # Video file
+            if path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv')):
                 processed_data.append({"type": "video", "video": path})
-            elif path.lower().endswith('.npy'):  # NumPy file
+            elif path.lower().endswith('.npy'):
                 np_array = np.load(path)
-                if np_array.ndim == 3:  # Single image
+                if np_array.ndim == 3:
                     image = Image.fromarray(np_array.astype('uint8'), 'RGB')
                     processed_data.append({"type": "image", "image": image})
-                elif np_array.ndim == 4:  # Multiple frames (treat as video)
-                    # For Qwen3-VL, we need to save frames as a temporary video or process differently
-                    # For simplicity, we'll process the first frame as an image
-                    # In production, you might want to save this as a temporary video file
+                elif np_array.ndim == 4:
                     frames = [Image.fromarray(frame.astype('uint8'), 'RGB') for frame in np_array]
                     # Use first frame for now - consider video handling improvement
                     processed_data.append({"type": "image", "image": frames[0]})
                 else:
                     raise ValueError(f"Unexpected shape for NumPy array in {path}")
-            else:  # Regular image file
+            else:
                 image = Image.open(path).convert('RGB')
                 processed_data.append({"type": "image", "image": image})
                 
         return processed_data
 
+    def _compute_token_prob(self, logits: torch.Tensor, token_id: int, temperature: float) -> float:
+        """
+        Apply temperature manually to raw logits before softmax.
+        We always pass temperature=1.0 to model.generate() so HF does not
+        apply temperature internally — we own the scaling here instead.
+        """
+        token_probs_dist = torch.nn.functional.softmax(logits / temperature, dim=-1)
+        return token_probs_dist[token_id].item(), token_probs_dist
+
     def forward(self,
         images: List[str],
         texts: List[str],
         fps=None,
-        question_template: str = "{}",# Please answer with only Yes or No.", #"Does this image show \"{}\"?",
+        question_template: str = "{}",
         answer_template: str = "Yes",
-        max_new_tokens: int = 1) -> torch.Tensor:
+        max_new_tokens: int = 1,
+        temperature: float = 1.0) -> torch.Tensor:
         """
         Calculate alignment scores using the probability of the answer token(s).
-        
-        Args:
-            images: List of image/video file paths
-            texts: List of text descriptions to check alignment with
-            fps: Frames per second for video processing (unused in Qwen3-VL)
-            question_template: Template for formatting the question
-            answer_template: Expected answer (default "Yes")
-            max_new_tokens: Maximum number of new tokens to generate
-            
-        Returns:
-            Tensor of joint probabilities for the answer token(s)
+        Temperature is applied manually to raw logits — HF receives temperature=1.0
+        so it does not rescale internally.
         """
         assert len(images) == len(texts), "Number of images/videos and texts must match"
         
@@ -231,7 +228,6 @@ class Qwen3VLModel(VQAScoreModel):
                 }
             ]
             
-            # Prepare inputs using processor
             inputs = self.processor.apply_chat_template(
                 messages,
                 tokenize=True,
@@ -241,7 +237,6 @@ class Qwen3VLModel(VQAScoreModel):
             )
             inputs = inputs.to(self.device)
             
-            # Tokenize the answer template
             answer_token_ids = self.processor.tokenizer.encode(answer, add_special_tokens=False)
             n_answer_tokens = len(answer_token_ids)
             
@@ -249,19 +244,18 @@ class Qwen3VLModel(VQAScoreModel):
                 outputs = self.model.generate(
                     **inputs,
                     max_new_tokens=max_new_tokens,
+                    temperature=1.0,   # HF must not apply temperature — we do it manually below
                     do_sample=False,
                     output_scores=True,
                     return_dict_in_generate=True
                 )
             
-            # Extract generated tokens
             generated_ids = outputs.sequences[0][inputs.input_ids.shape[1]:]
             generated_text = self.processor.tokenizer.decode(generated_ids, skip_special_tokens=True)
             
             # print(f"\nGenerated output:")
             # print(f"  {generated_text}")
             
-            # CHECK: Make sure last generated token is not a special token
             last_token_id = generated_ids[-1].item()
             special_token_ids = [
                 self.processor.tokenizer.eos_token_id,
@@ -274,19 +268,16 @@ class Qwen3VLModel(VQAScoreModel):
                 special_name = "EOS" if last_token_id == self.processor.tokenizer.eos_token_id else \
                             "BOS" if last_token_id == self.processor.tokenizer.bos_token_id else "PAD"
                 # print(f"  Note: Last token is {special_name}, adjusting scoring")
-                # Remove the special token from consideration
                 n_answer_tokens = min(n_answer_tokens, len(outputs.scores) - 1)
                 offset = 1
                 if n_answer_tokens <= 0:
                     raise ValueError("No content tokens to score after removing special tokens")
             
-            # Check if we have enough tokens to score
             if len(outputs.scores) < n_answer_tokens:
                 print(f"  Warning: Generated {len(outputs.scores)} tokens but need {n_answer_tokens}, adjusting")
                 n_answer_tokens = len(outputs.scores)
                 answer_token_ids = answer_token_ids[:n_answer_tokens]
             
-            # Get the indices and text of the scored tokens
             if offset > 0:
                 scored_token_ids = generated_ids[-(n_answer_tokens + offset):-offset].tolist()
             else:
@@ -298,18 +289,15 @@ class Qwen3VLModel(VQAScoreModel):
             # print(f"\nScoring token(s): '{scored_tokens_text}'")
             # print(f"  Token indices in generated sequence: {scored_indices}")
             
-            # Extract probability for last n_answer_tokens
             joint_prob = 1.0
             for i in range(n_answer_tokens):
                 position = -(n_answer_tokens - i + offset)
                 token_logits = outputs.scores[position][0]
-                token_probs_dist = torch.nn.functional.softmax(token_logits, dim=-1)
-                
+
                 expected_token_id = answer_token_ids[i]
-                token_prob = token_probs_dist[expected_token_id].item()
+                token_prob, token_probs_dist = self._compute_token_prob(token_logits, expected_token_id, temperature)
                 joint_prob *= token_prob
                 
-                # Show top 5 alternatives at this position
                 # print(f"\n  Position {position} in outputs.scores (token index {scored_indices[i]} in sequence):")
                 # print(f"    Answer Template token ID: {expected_token_id}")
                 # print(f"    Answer Template token text: '{self.processor.tokenizer.decode([expected_token_id])}'")
@@ -324,7 +312,6 @@ class Qwen3VLModel(VQAScoreModel):
                     print(f"      {rank}. ID={token_id_int:6d} | P={prob.item():.6f} | Text='{token_text}' {is_expected}")
             
             # print(f"\nJoint probability: {joint_prob:.6f}")
-            # Switched to Geometric Mean Probability
             geometric_mean_prob = joint_prob ** (1.0 / n_answer_tokens)
             lm_probs.append(geometric_mean_prob)
         
@@ -341,29 +328,18 @@ class Qwen3VLModel(VQAScoreModel):
                 question_template: str = "{}",
                 answer_template: str = "Yes",
                 max_new_tokens: int = 1,
+                temperature: float = 1.0,
                 score_position: str = "end") -> Tuple[torch.Tensor, List[Dict]]:
         """
         Calculate alignment scores with detailed trace information for debugging.
-        
-        Args:
-            images: List of image/video file paths
-            texts: List of text descriptions to check alignment with
-            fps: Frames per second for video processing (unused in Qwen3-VL)
-            question_template: Template for formatting the question
-            answer_template: Expected answer (default "Yes")
-            max_new_tokens: Maximum number of new tokens to generate
-            score_position: Where to extract the score from:
-                - "start": Score the first n tokens of the generation
-                - "end": Score the last n tokens (default, original behavior)
-                
-        Returns:
-            Tuple of (scores tensor, list of trace dictionaries)
+        Temperature is applied manually to raw logits — HF receives temperature=1.0
+        so it does not rescale internally.
         """
         assert len(images) == len(texts), "Number of images/videos and texts must match"
         assert score_position in ("start", "end"), f"score_position must be 'start' or 'end', got '{score_position}'"
         
-        if score_position == "after_text" and score_after_text is None:
-            raise ValueError("score_after_text must be provided when score_position='after_text'")
+        # if score_position == "after_text" and score_after_text is None:
+        #     raise ValueError("score_after_text must be provided when score_position='after_text'")
         
         questions = [question_template.format(text) for text in texts]
         answers = [answer_template.format(text) for text in texts]
@@ -380,7 +356,6 @@ class Qwen3VLModel(VQAScoreModel):
                 }
             ]
             
-            # Prepare inputs using processor
             inputs = self.processor.apply_chat_template(
                 messages,
                 tokenize=True,
@@ -390,7 +365,6 @@ class Qwen3VLModel(VQAScoreModel):
             )
             inputs = inputs.to(self.device)
             
-            # Tokenize the answer template
             answer_token_ids = self.processor.tokenizer.encode(answer, add_special_tokens=False)
             n_answer_tokens = len(answer_token_ids)
             
@@ -398,35 +372,28 @@ class Qwen3VLModel(VQAScoreModel):
                 outputs = self.model.generate(
                     **inputs,
                     max_new_tokens=max_new_tokens,
+                    temperature=1.0,   # HF must not apply temperature — we do it manually below
                     do_sample=False,
                     output_scores=True,
                     return_dict_in_generate=True
                 )
             
-            # Extract generated tokens
             generated_ids = outputs.sequences[0][inputs.input_ids.shape[1]:]
             generated_text = self.processor.tokenizer.decode(generated_ids, skip_special_tokens=True)
             
-            # Determine scoring position and handle special tokens
             if score_position == "start":
-                # Score from the beginning of generation
                 score_start_idx = 0
                 offset = 0
-                
             else:  # score_position == "end"
-                # Original behavior: score from the end
-                # Check if last token is a special token
                 last_token_id = generated_ids[-1].item()
                 special_token_ids = [
                     self.processor.tokenizer.eos_token_id,
                     self.processor.tokenizer.bos_token_id,
                     self.processor.tokenizer.pad_token_id
                 ]
-                
                 offset = 1 if last_token_id in special_token_ids else 0
                 score_start_idx = len(generated_ids) - n_answer_tokens - offset
             
-            # Validate we have enough tokens
             if score_start_idx < 0:
                 score_start_idx = 0
             
@@ -439,25 +406,21 @@ class Qwen3VLModel(VQAScoreModel):
             if n_answer_tokens <= 0:
                 raise ValueError("No tokens available to score at the specified position")
             
-            # Get the indices and text of the scored tokens
             scored_indices = list(range(score_start_idx, score_start_idx + n_answer_tokens))
             scored_token_ids = generated_ids[score_start_idx:score_start_idx + n_answer_tokens].tolist()
             scored_tokens_text = self.processor.tokenizer.decode(scored_token_ids, skip_special_tokens=True)
             
-            # Extract probability for the answer tokens at the determined position
             joint_prob = 1.0
             token_details = []
             
             for i in range(n_answer_tokens):
                 score_idx = score_start_idx + i
                 token_logits = outputs.scores[score_idx][0]
-                token_probs_dist = torch.nn.functional.softmax(token_logits, dim=-1)
-                
+
                 expected_token_id = answer_token_ids[i]
-                token_prob = token_probs_dist[expected_token_id].item()
+                token_prob, token_probs_dist = self._compute_token_prob(token_logits, expected_token_id, temperature)
                 joint_prob *= token_prob
                 
-                # Get top 5 alternatives at this position
                 top_probs, top_indices = torch.topk(token_probs_dist, 5)
                 
                 alternatives = []
@@ -478,10 +441,8 @@ class Qwen3VLModel(VQAScoreModel):
                     'top_alternatives': alternatives
                 })
             
-            # Geometric mean probability
             geometric_mean_prob = joint_prob ** (1.0 / n_answer_tokens)
             
-            # Store trace info
             trace = {
                 'generated_text': generated_text,
                 'generated_length': len(generated_ids),
@@ -508,24 +469,13 @@ class Qwen3VLModel(VQAScoreModel):
                 top_p: float = 0.9) -> List[str]:
         """
         Generate text responses for given images and text prompts.
-        
-        Args:
-            images: List of image/video file paths
-            texts: List of text prompts/questions
-            fps: Frames per second (unused in Qwen3-VL)
-            max_new_tokens: Maximum number of tokens to generate
-            temperature: Sampling temperature (0.0 = greedy, higher = more random)
-            do_sample: Whether to use sampling. If None, automatically set based on temperature
-            top_p: Nucleus sampling parameter
-            
-        Returns:
-            List of generated text responses
+        Note: temperature here controls HF sampling directly (not manually applied),
+        since generation quality (not probability calibration) is the goal.
         """
         assert len(images) == len(texts), "Number of paths and texts must match"
         
         processed_data = self.load_images(images)
         
-        # Auto-determine do_sample if not specified
         if do_sample is None:
             do_sample = (temperature > 0)
         
@@ -538,7 +488,6 @@ class Qwen3VLModel(VQAScoreModel):
                 }
             ]
             
-            # Prepare inputs
             inputs = self.processor.apply_chat_template(
                 messages,
                 tokenize=True,
@@ -548,12 +497,10 @@ class Qwen3VLModel(VQAScoreModel):
             )
             inputs = inputs.to(self.device)
             
-            # Prepare generation kwargs
             generation_kwargs = {
                 "max_new_tokens": max_new_tokens,
             }
             
-            # Add sampling parameters
             if do_sample and temperature > 0:
                 generation_kwargs.update({
                     "do_sample": True,

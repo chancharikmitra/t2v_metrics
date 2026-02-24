@@ -292,6 +292,27 @@ score = qwen_score(images=videos, texts=texts, fps=8.0)  # M x N score tensor
 # score = llava_score(images=[video], texts=[text], num_frames=8) # We did our best to align with the default num_frames for each model, but to be certain, please check each respective model's spec or paper for confirmation.
 ```
 
+#### Current Gemini Usage:
+
+```python
+import t2v_metrics
+
+### For a single (video, text) pair:
+gemini_score = t2v_metrics.VQAScore(model='gemini-3-pro-preview', project_id='your-gcp-project-id')
+video = "videos/baby.mp4"
+text = "a baby crying"
+score = gemini_score(images=[video], texts=[text])
+
+### Pairwise similarity scores between M videos and N texts:
+videos = ["videos/baby.mp4", "videos/ducks.mp4"]
+texts = ["a baby crying", "a group of ducks standing in the water"]
+scores = gemini_score(images=videos, texts=texts)  # M x N score tensor
+
+### Generation:
+responses = gemini_score.model.generate(images=[video], texts=["Describe what is happening in this video."])
+print(responses[0])
+```
+
 ### Text generation (VQA)
 To generate texts (captioning or VQA tasks) for any of our models, please use the below code:
 ```python
