@@ -163,7 +163,7 @@ class GeminiModel(VQAScoreModel):
             top_k=20,
             response_logprobs=True,
             logprobs=self.logprobs,
-            max_output_tokens=200,   # headroom for thinking models
+            max_output_tokens=65,536,   # headroom for thinking models
             safety_settings=SAFETY_SETTINGS,
         )
 
@@ -228,7 +228,7 @@ class GeminiModel(VQAScoreModel):
 
         return lm_prob
 
-    def generate_single(self, data, question, max_new_tokens=1024, temperature=0.0):
+    def generate_single(self, data, question, max_new_tokens=65536, temperature=0.0):
         config = GenerateContentConfig(
             temperature=temperature,
             top_p=0.95,
@@ -257,7 +257,7 @@ class GeminiModel(VQAScoreModel):
                  images: List[str],
                  texts: List[str],
                  num_frames: int = 5,
-                 max_new_tokens: int = 1024,
+                 max_new_tokens: int = 65536,
                  fps=None,
                  temperature: float = 0.0) -> List[str]:
 

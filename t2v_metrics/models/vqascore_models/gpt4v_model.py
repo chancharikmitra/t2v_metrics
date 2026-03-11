@@ -22,7 +22,8 @@ GPT4V_MODELS = {
     'gpt-5-mini': {},
     'gpt-5-nano': {},
     'gpt-5-chat-latest': {},
-    'gpt-4o-2024-08-06': {}
+    'gpt-4o-2024-08-06': {},
+    'gpt-5.4': {}
 
 }
 
@@ -293,7 +294,7 @@ class GPT4VModel(VQAScoreModel):
             images: List[str],
             texts: List[str],
             num_frames: int = 5,
-            max_new_tokens: int = 256) -> List[str]:
+            max_new_tokens: int = 2048) -> List[str]:
         """
         Generate text responses.
         
