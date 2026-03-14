@@ -163,7 +163,7 @@ class GeminiModel(VQAScoreModel):
             top_k=20,
             response_logprobs=True,
             logprobs=self.logprobs,
-            max_output_tokens=65,536,   # headroom for thinking models
+            max_output_tokens=65536,   # headroom for thinking models
             safety_settings=SAFETY_SETTINGS,
         )
 
