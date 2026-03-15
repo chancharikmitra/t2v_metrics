@@ -155,6 +155,16 @@ class Qwen2VLModel(VQAScoreModel):
                 image = Image.open(path).convert('RGB')
                 processed_data.append({"type": "image", "image": image})
         return processed_data
+
+    def _compute_token_prob(self, logits: torch.Tensor, token_id: int, temperature: float) -> float:
+        """
+        Apply temperature manually to raw logits before softmax.
+        We always pass temperature=1.0 to model.generate() so HF does not
+        apply temperature internally — we own the scaling here instead.
+        """
+        token_probs_dist = torch.nn.functional.softmax(logits / temperature, dim=-1)
+        return token_probs_dist[token_id].item(), token_probs_dist
+
     # Qwen2.5-vl forward method
     def forward(self,
             images: List[str],
@@ -162,7 +172,8 @@ class Qwen2VLModel(VQAScoreModel):
             fps=None,
             question_template: str = "Does this image show \"{}\"? Answer the question with Yes or No",
             answer_template: str = "Yes",
-            max_new_tokens: int = 1) -> torch.Tensor:
+            max_new_tokens: int = 1,
+            temperature: float = 1.0) -> torch.Tensor:
     
         assert len(images) == len(texts), "Number of images/videos and texts must match"
         
@@ -197,6 +208,7 @@ class Qwen2VLModel(VQAScoreModel):
                 outputs = self.model.generate(
                     **inputs,
                     max_new_tokens=max_new_tokens,
+                    temperature=1.0,   # HF must not apply temperature — we do it manually below
                     do_sample=False,
                     output_scores=True,
                     return_dict_in_generate=True
@@ -251,10 +263,9 @@ class Qwen2VLModel(VQAScoreModel):
             for i in range(n_answer_tokens):
                 position = -(n_answer_tokens - i + offset)
                 token_logits = outputs.scores[position][0]
-                token_probs_dist = torch.nn.functional.softmax(token_logits, dim=-1)
                 
                 expected_token_id = answer_token_ids[i]
-                token_prob = token_probs_dist[expected_token_id].item()
+                token_prob, token_probs_dist = self._compute_token_prob(token_logits, expected_token_id, temperature)
                 joint_prob *= token_prob
                 
                 # Show top 5 alternatives at this position
@@ -284,7 +295,8 @@ class Qwen2VLModel(VQAScoreModel):
                        fps=None,
                        question_template: str = "Does this image show \"{}\"? Answer the question with Yes or No",
                        answer_template: str = "Yes",
-                       max_new_tokens: int = 1) -> Tuple[torch.Tensor, List[Dict]]:
+                       max_new_tokens: int = 1,
+                       temperature: float = 1.0) -> Tuple[torch.Tensor, List[Dict]]:
         """
         Calculate alignment scores with detailed trace information for debugging.
         
@@ -295,6 +307,7 @@ class Qwen2VLModel(VQAScoreModel):
             question_template: Template for formatting the question
             answer_template: Expected answer (default "Yes")
             max_new_tokens: Maximum number of new tokens to generate
+            temperature: Temperature for probability calibration (applied manually to logits)
             
         Returns:
             Tuple of (scores tensor, list of trace dictionaries)
@@ -334,6 +347,7 @@ class Qwen2VLModel(VQAScoreModel):
                 outputs = self.model.generate(
                     **inputs,
                     max_new_tokens=max_new_tokens,
+                    temperature=1.0,   # HF must not apply temperature — we do it manually below
                     do_sample=False,
                     output_scores=True,
                     return_dict_in_generate=True
@@ -389,10 +403,9 @@ class Qwen2VLModel(VQAScoreModel):
             for i in range(n_answer_tokens):
                 position = -(n_answer_tokens - i + offset)
                 token_logits = outputs.scores[position][0]
-                token_probs_dist = torch.nn.functional.softmax(token_logits, dim=-1)
                 
                 expected_token_id = answer_token_ids[i]
-                token_prob = token_probs_dist[expected_token_id].item()
+                token_prob, token_probs_dist = self._compute_token_prob(token_logits, expected_token_id, temperature)
                 joint_prob *= token_prob
                 
                 # Show top 5 alternatives at this position
@@ -434,10 +447,21 @@ class Qwen2VLModel(VQAScoreModel):
                 images: List[str],
                 texts: List[str],
                 fps=None,
-                max_new_tokens: int = 256) -> List[str]:
+                max_new_tokens: int = 256,
+                temperature: float = 0.0,
+                do_sample: bool = None,
+                top_p: float = 0.9) -> List[str]:
+        """
+        Generate text responses for given images and text prompts.
+        Note: temperature here controls HF sampling directly (not manually applied),
+        since generation quality (not probability calibration) is the goal.
+        """
         assert len(images) == len(texts), "Number of paths and texts must match"
         
         processed_data = self.load_images(images, fps)
+        
+        if do_sample is None:
+            do_sample = (temperature > 0)
         
         generated_texts = []
         for data, text in zip(processed_data, texts):
@@ -454,8 +478,23 @@ class Qwen2VLModel(VQAScoreModel):
             )
             inputs = inputs.to(self.device)
             
+            generation_kwargs = {
+                "max_new_tokens": max_new_tokens,
+            }
+            
+            if do_sample and temperature > 0:
+                generation_kwargs.update({
+                    "do_sample": True,
+                    "temperature": temperature,
+                    "top_p": top_p,
+                })
+            else:
+                generation_kwargs.update({
+                    "do_sample": False,
+                })
+            
             with torch.inference_mode():
-                generated_ids = self.model.generate(**inputs, max_new_tokens=max_new_tokens)
+                generated_ids = self.model.generate(**inputs, **generation_kwargs)
                 generated_ids_trimmed = [
                     out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
                 ]
