@@ -447,7 +447,7 @@ class Qwen2VLModel(VQAScoreModel):
                 images: List[str],
                 texts: List[str],
                 fps=None,
-                max_new_tokens: int = 256,
+                max_new_tokens: int = 2048,
                 temperature: float = 0.0,
                 do_sample: bool = None,
                 top_p: float = 0.9) -> List[str]:

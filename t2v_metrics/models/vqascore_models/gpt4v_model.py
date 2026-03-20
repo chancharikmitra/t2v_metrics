@@ -205,7 +205,9 @@ class GPT4VModel(VQAScoreModel):
                 question_template: str = default_question_template,
                 answer_template: str = default_answer_template,
                 num_frames: int = 4,
-                max_new_tokens: int = 1) -> torch.Tensor:
+                fps: int=None,
+                max_new_tokens: int = 1,
+                temperature: float=None) -> torch.Tensor:
         """
         Forward pass with flexible token extraction.
         
@@ -294,7 +296,9 @@ class GPT4VModel(VQAScoreModel):
             images: List[str],
             texts: List[str],
             num_frames: int = 5,
-            max_new_tokens: int = 2048) -> List[str]:
+            fps: int = None,
+            max_new_tokens: int = 2048,
+            temperature: float=None) -> List[str]:
         """
         Generate text responses.
         
