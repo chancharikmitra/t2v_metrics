@@ -89,7 +89,17 @@ class GPT4VModel(VQAScoreModel):
                 })
         return loaded_data
 
-    def forward_single(self, data, question, answer):
+
+    def forward_single(self, data, question, answer, max_new_tokens=1):
+        """
+        Forward pass for a single sample with flexible token extraction.
+        
+        Args:
+            data: Image/video data dict
+            question: Question text
+            answer: Expected answer (can be multi-token)
+            max_new_tokens: Maximum tokens to generate (1 for binary, 100+ for CoT)
+        """
         try:
             if data['type'] == 'video':
                 content = [
@@ -107,10 +117,11 @@ class GPT4VModel(VQAScoreModel):
                 messages=[{"role": "user", "content": content}],
                 logprobs=True,
                 top_logprobs=self.top_logprobs,
+                max_tokens=max_new_tokens,
             )
 
         except:
-            try: # Second try
+            try:  # Second try
                 if data['type'] == 'video':
                     content = [
                         {"type": "text", "text": question},
@@ -127,54 +138,171 @@ class GPT4VModel(VQAScoreModel):
                     messages=[{"role": "user", "content": content}],
                     logprobs=True,
                     top_logprobs=self.top_logprobs,
+                    max_tokens=max_new_tokens,
                 )
-                print(f'completion {completion}')
-            except Exception as e: # Old Error Handling
+            except Exception as e:
                 print(f"Failed image: {data['path']} and question: {question} and answer: {answer}")
                 print(f"Error: {str(e)}")
                 return torch.Tensor([0.0])
 
-                
+        # Extract generated text and logprobs
+        generated_text = completion.choices[0].message.content.strip()
+        logprobs_content = completion.choices[0].logprobs.content
+        
+        # Always extract from LAST token (format ensures last token is Yes/No)
+        last_token_idx = len(logprobs_content) - 1
+        last_token_data = logprobs_content[last_token_idx]
+        last_token_text = last_token_data.token.strip()
+        
+        # DEBUG: Print generated output and verification
+        print(f"\n[GPT-4o] Generated: {generated_text}")
+        print(f"[GPT-4o] Total tokens: {len(logprobs_content)}, Last token index: {last_token_idx}")
+        print(f"[GPT-4o] Last token text: '{last_token_text}'")
+        
+        # Extract probability from last token
         is_generated = False
-        for top_logprob in completion.choices[0].logprobs.content[0].top_logprobs:
+        for top_logprob in last_token_data.top_logprobs:
             if answer.lower() == "yes":
-                if top_logprob.token == 'Yes' or top_logprob.token == 'yes':
+                if top_logprob.token.strip().lower() == 'yes':
                     is_generated = True
                     return torch.Tensor([top_logprob.logprob]).exp()
-                elif top_logprob.token == 'No' or top_logprob.token == 'no':
+                elif top_logprob.token.strip().lower() == 'no':
                     is_generated = True
                     return 1 - torch.Tensor([top_logprob.logprob]).exp()
-            else:
-                if top_logprob.token == answer:
+            elif answer.lower() == "no":
+                if top_logprob.token.strip().lower() == 'no':
                     is_generated = True
                     return torch.Tensor([top_logprob.logprob]).exp()
+                elif top_logprob.token.strip().lower() == 'yes':
+                    is_generated = True
+                    return 1 - torch.Tensor([top_logprob.logprob]).exp()
+        
         if not is_generated:
-            print(f"Warning: '{answer}' not included in gpt4o log probs: {data['path']} and question: {question} and answer: {answer}")
-            print(completion.choices[0].logprobs.content[0].top_logprobs)
+            print(f"[GPT-4o] Warning: '{answer}' not in last token top_logprobs")
+            print(f"[GPT-4o] Top logprobs: {[lp.token for lp in last_token_data.top_logprobs]}")
             return torch.Tensor([0.0])
+
 
     def forward(self,
                 paths: List[str],
                 texts: List[str],
                 question_template: str = default_question_template,
                 answer_template: str = default_answer_template,
-                num_frames: int = 4) -> torch.Tensor:
+                num_frames: int = 4,
+                max_new_tokens: int = 1) -> torch.Tensor:
+        """
+        Forward pass with flexible token extraction.
+        
+        Args:
+            paths: List of image/video paths
+            texts: List of text prompts
+            question_template: Template for questions
+            answer_template: Template for answers
+            num_frames: Number of frames for videos
+            max_new_tokens: Max tokens to generate (1 for binary, 100+ for CoT)
+        
+        Returns:
+            Tensor of token probabilities
+        """
         assert len(paths) == len(texts), "Number of paths and texts must match"
         questions = [question_template.format(text) for text in texts]
         answers = [answer_template.format(text) for text in texts]
-
-        for ans in answers:
-            ans_tokens = self.tokenizer.encode(ans)
-            assert len(ans_tokens) == 1, "Currently only support single token answers"
 
         loaded_data = self.load_images(paths, num_frames)
 
         lm_prob = torch.zeros(len(paths))
 
         for idx, (data, question, answer) in enumerate(zip(loaded_data, questions, answers)):
-            lm_prob[idx] = self.forward_single(data, question, answer)
+            lm_prob[idx] = self.forward_single(data, question, answer, max_new_tokens=max_new_tokens)
 
         return lm_prob
+
+    # def forward_single(self, data, question, answer):
+    #     try:
+    #         if data['type'] == 'video':
+    #             content = [
+    #                 {"type": "text", "text": question},
+    #                 *[{"type": "image_url", "image_url": {"url": f"data:image/jpg;base64,{frame}"}} for frame in data['frames']]
+    #             ]
+    #         else:
+    #             content = [
+    #                 {"type": "text", "text": question},
+    #                 {"type": "image_url", "image_url": {"url": f"data:image/{data['type']};base64,{data['base64']}"}}
+    #             ]
+
+    #         completion = self.client.chat.completions.create(
+    #             model=self.model_name,
+    #             messages=[{"role": "user", "content": content}],
+    #             logprobs=True,
+    #             top_logprobs=self.top_logprobs,
+    #         )
+
+    #     except:
+    #         try: # Second try
+    #             if data['type'] == 'video':
+    #                 content = [
+    #                     {"type": "text", "text": question},
+    #                     *[{"type": "image_url", "image_url": {"url": f"data:image/jpg;base64,{frame}"}} for frame in data['frames']]
+    #                 ]
+    #             else:
+    #                 content = [
+    #                     {"type": "text", "text": question},
+    #                     {"type": "image_url", "image_url": {"url": f"data:image/{data['type']};base64,{data['base64']}"}}
+    #                 ]
+
+    #             completion = self.client.chat.completions.create(
+    #                 model=self.model_name,
+    #                 messages=[{"role": "user", "content": content}],
+    #                 logprobs=True,
+    #                 top_logprobs=self.top_logprobs,
+    #             )
+    #             print(f'completion {completion}')
+    #         except Exception as e: # Old Error Handling
+    #             print(f"Failed image: {data['path']} and question: {question} and answer: {answer}")
+    #             print(f"Error: {str(e)}")
+    #             return torch.Tensor([0.0])
+
+                
+    #     is_generated = False
+    #     for top_logprob in completion.choices[0].logprobs.content[0].top_logprobs:
+    #         if answer.lower() == "yes":
+    #             if top_logprob.token == 'Yes' or top_logprob.token == 'yes':
+    #                 is_generated = True
+    #                 return torch.Tensor([top_logprob.logprob]).exp()
+    #             elif top_logprob.token == 'No' or top_logprob.token == 'no':
+    #                 is_generated = True
+    #                 return 1 - torch.Tensor([top_logprob.logprob]).exp()
+    #         else:
+    #             if top_logprob.token == answer:
+    #                 is_generated = True
+    #                 return torch.Tensor([top_logprob.logprob]).exp()
+    #     if not is_generated:
+    #         print(f"Warning: '{answer}' not included in gpt4o log probs: {data['path']} and question: {question} and answer: {answer}")
+    #         print(completion.choices[0].logprobs.content[0].top_logprobs)
+    #         return torch.Tensor([0.0])
+
+    # def forward(self,
+    #             paths: List[str],
+    #             texts: List[str],
+    #             question_template: str = default_question_template,
+    #             answer_template: str = default_answer_template,
+    #             num_frames: int = 4) -> torch.Tensor:
+    #     assert len(paths) == len(texts), "Number of paths and texts must match"
+    #     questions = [question_template.format(text) for text in texts]
+    #     answers = [answer_template.format(text) for text in texts]
+
+    #     for ans in answers:
+    #         ans_tokens = self.tokenizer.encode(ans)
+    #         assert len(ans_tokens) == 1, "Currently only support single token answers"
+
+    #     loaded_data = self.load_images(paths, num_frames)
+
+    #     lm_prob = torch.zeros(len(paths))
+
+    #     for idx, (data, question, answer) in enumerate(zip(loaded_data, questions, answers)):
+    #         lm_prob[idx] = self.forward_single(data, question, answer)
+
+    #     return lm_prob
     
     def generate_single(self, data, question, max_new_tokens):
         try:
