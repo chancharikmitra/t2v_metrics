@@ -201,11 +201,20 @@ class Qwen3VLModel(VQAScoreModel):
         question_template: str = "{}",
         answer_template: str = "Yes",
         max_new_tokens: int = 1,
-        temperature: float = 1.0) -> torch.Tensor:
+        temperature: float = 1.0,
+        do_sample: bool = False,
+        sample_temperature: float = 0.7) -> torch.Tensor:
         """
         Calculate alignment scores using the probability of the answer token(s).
-        Temperature is applied manually to raw logits — HF receives temperature=1.0
-        so it does not rescale internally.
+        
+        Temperature handling:
+            - `temperature`: Applied post-hoc to raw logits for probability
+              calibration. HF always receives temperature=1.0 internally so
+              logits stay unscaled during generation.
+            - `do_sample`: If True, enables stochastic token sampling during
+              generation (required for self-consistency across rollouts).
+            - `sample_temperature`: Controls sampling diversity when
+              do_sample=True. Ignored when do_sample=False.
         """
         assert len(images) == len(texts), "Number of images/videos and texts must match"
         
@@ -216,11 +225,6 @@ class Qwen3VLModel(VQAScoreModel):
         lm_probs = []
         
         for idx, (data, question, answer) in enumerate(zip(processed_data, questions, answers)):
-            # print(f"\n{'='*60}")
-            # print(f"Sample {idx + 1}/{len(images)}")
-            # print(f"Path: {images[idx]}")
-            # print(f"Text: {texts[idx]}")
-            
             messages = [
                 {
                     "role": "user",
@@ -240,21 +244,27 @@ class Qwen3VLModel(VQAScoreModel):
             answer_token_ids = self.processor.tokenizer.encode(answer, add_special_tokens=False)
             n_answer_tokens = len(answer_token_ids)
             
+            generate_kwargs = dict(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                output_scores=True,
+                return_dict_in_generate=True,
+            )
+            
+            if do_sample:
+                generate_kwargs["do_sample"] = True
+                generate_kwargs["temperature"] = sample_temperature
+                generate_kwargs["top_k"] = 0
+                generate_kwargs["top_p"] = 1.0
+            else:
+                generate_kwargs["do_sample"] = False
+                generate_kwargs["temperature"] = 1.0
+            
             with torch.inference_mode():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    temperature=1.0,   # HF must not apply temperature — we do it manually below
-                    do_sample=False,
-                    output_scores=True,
-                    return_dict_in_generate=True
-                )
+                outputs = self.model.generate(**generate_kwargs)
             
             generated_ids = outputs.sequences[0][inputs.input_ids.shape[1]:]
             generated_text = self.processor.tokenizer.decode(generated_ids, skip_special_tokens=True)
-            
-            # print(f"\nGenerated output:")
-            # print(f"  {generated_text}")
             
             last_token_id = generated_ids[-1].item()
             special_token_ids = [
@@ -265,9 +275,6 @@ class Qwen3VLModel(VQAScoreModel):
             
             offset = 0
             if last_token_id in special_token_ids:
-                special_name = "EOS" if last_token_id == self.processor.tokenizer.eos_token_id else \
-                            "BOS" if last_token_id == self.processor.tokenizer.bos_token_id else "PAD"
-                # print(f"  Note: Last token is {special_name}, adjusting scoring")
                 n_answer_tokens = min(n_answer_tokens, len(outputs.scores) - 1)
                 offset = 1
                 if n_answer_tokens <= 0:
@@ -286,23 +293,14 @@ class Qwen3VLModel(VQAScoreModel):
             scored_indices = list(range(len(generated_ids) - n_answer_tokens - offset, len(generated_ids) - offset))
             scored_tokens_text = self.processor.tokenizer.decode(scored_token_ids, skip_special_tokens=True)
             
-            # print(f"\nScoring token(s): '{scored_tokens_text}'")
-            # print(f"  Token indices in generated sequence: {scored_indices}")
-            
             joint_prob = 1.0
             for i in range(n_answer_tokens):
                 position = -(n_answer_tokens - i + offset)
                 token_logits = outputs.scores[position][0]
-
+ 
                 expected_token_id = answer_token_ids[i]
                 token_prob, token_probs_dist = self._compute_token_prob(token_logits, expected_token_id, temperature)
                 joint_prob *= token_prob
-                
-                # print(f"\n  Position {position} in outputs.scores (token index {scored_indices[i]} in sequence):")
-                # print(f"    Answer Template token ID: {expected_token_id}")
-                # print(f"    Answer Template token text: '{self.processor.tokenizer.decode([expected_token_id])}'")
-                # print(f"    P(answer_template): {token_prob:.6f}")
-                # print(f"\n    Top 5 alternatives:")
                 
                 top_probs, top_indices = torch.topk(token_probs_dist, 5)
                 for rank, (prob, token_id) in enumerate(zip(top_probs, top_indices), 1):
@@ -311,16 +309,13 @@ class Qwen3VLModel(VQAScoreModel):
                     is_expected = "✓" if token_id_int == expected_token_id else " "
                     print(f"      {rank}. ID={token_id_int:6d} | P={prob.item():.6f} | Text='{token_text}' {is_expected}")
             
-            # print(f"\nJoint probability: {joint_prob:.6f}")
             geometric_mean_prob = joint_prob ** (1.0 / n_answer_tokens)
             lm_probs.append(geometric_mean_prob)
-        
-        # print(f"\n{'='*60}")
-        # print(f"Final scores: {lm_probs}")
         
         return torch.tensor(lm_probs)
 
     
+      
     def forward_with_trace(self,
                 images: List[str],
                 texts: List[str],
@@ -329,17 +324,23 @@ class Qwen3VLModel(VQAScoreModel):
                 answer_template: str = "Yes",
                 max_new_tokens: int = 1,
                 temperature: float = 1.0,
-                score_position: str = "end") -> Tuple[torch.Tensor, List[Dict]]:
+                score_position: str = "end",
+                do_sample: bool = False,
+                sample_temperature: float = 0.7) -> Tuple[torch.Tensor, List[Dict]]:
         """
         Calculate alignment scores with detailed trace information for debugging.
-        Temperature is applied manually to raw logits — HF receives temperature=1.0
-        so it does not rescale internally.
+        
+        Temperature handling:
+            - `temperature`: Applied post-hoc to raw logits for probability
+              calibration. HF always receives temperature=1.0 internally so
+              logits stay unscaled during generation.
+            - `do_sample`: If True, enables stochastic token sampling during
+              generation (required for self-consistency across rollouts).
+            - `sample_temperature`: Controls sampling diversity when
+              do_sample=True. Ignored when do_sample=False.
         """
         assert len(images) == len(texts), "Number of images/videos and texts must match"
         assert score_position in ("start", "end"), f"score_position must be 'start' or 'end', got '{score_position}'"
-        
-        # if score_position == "after_text" and score_after_text is None:
-        #     raise ValueError("score_after_text must be provided when score_position='after_text'")
         
         questions = [question_template.format(text) for text in texts]
         answers = [answer_template.format(text) for text in texts]
@@ -368,15 +369,24 @@ class Qwen3VLModel(VQAScoreModel):
             answer_token_ids = self.processor.tokenizer.encode(answer, add_special_tokens=False)
             n_answer_tokens = len(answer_token_ids)
             
+            generate_kwargs = dict(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                output_scores=True,
+                return_dict_in_generate=True,
+            )
+            
+            if do_sample:
+                generate_kwargs["do_sample"] = True
+                generate_kwargs["temperature"] = sample_temperature
+                generate_kwargs["top_k"] = 0
+                generate_kwargs["top_p"] = 1.0
+            else:
+                generate_kwargs["do_sample"] = False
+                generate_kwargs["temperature"] = 1.0
+            
             with torch.inference_mode():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    temperature=1.0,   # HF must not apply temperature — we do it manually below
-                    do_sample=False,
-                    output_scores=True,
-                    return_dict_in_generate=True
-                )
+                outputs = self.model.generate(**generate_kwargs)
             
             generated_ids = outputs.sequences[0][inputs.input_ids.shape[1]:]
             generated_text = self.processor.tokenizer.decode(generated_ids, skip_special_tokens=True)
@@ -416,7 +426,7 @@ class Qwen3VLModel(VQAScoreModel):
             for i in range(n_answer_tokens):
                 score_idx = score_start_idx + i
                 token_logits = outputs.scores[score_idx][0]
-
+ 
                 expected_token_id = answer_token_ids[i]
                 token_prob, token_probs_dist = self._compute_token_prob(token_logits, expected_token_id, temperature)
                 joint_prob *= token_prob
@@ -451,6 +461,8 @@ class Qwen3VLModel(VQAScoreModel):
                 'scored_indices': scored_indices,
                 'scored_tokens_text': scored_tokens_text,
                 'probability': geometric_mean_prob,
+                'do_sample': do_sample,
+                'sample_temperature': sample_temperature if do_sample else None,
                 'token_details': token_details
             }
             

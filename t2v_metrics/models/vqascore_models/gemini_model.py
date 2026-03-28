@@ -228,6 +228,31 @@ class GeminiModel(VQAScoreModel):
 
         return lm_prob
 
+    def forward_with_trace(self, images, texts, answer_template="Yes",
+                       max_new_tokens=1, temperature=0.0, 
+                       score_position="start", **kwargs):
+        """Compatibility wrapper for VideoCaptionAPI.score()."""
+        self.load_model()
+        loaded_data = self.load_images(images)
+        
+        scores = []
+        traces = []
+        for data, text in zip(loaded_data, texts):
+            answer = answer_template.strip()
+            prob = self.forward_single(data, text, answer, temperature=temperature)
+            score_val = float(prob.item())
+            scores.append(score_val)
+            traces.append({
+                "generated_text": answer,
+                "generated_length": 1,
+                "score_position": score_position,
+                "scored_tokens_text": answer,
+                "probability": score_val,
+                "token_details": [],
+            })
+        
+        return torch.tensor(scores), traces
+
     def generate_single(self, data, question, max_new_tokens=65536, temperature=0.0):
         config = GenerateContentConfig(
             temperature=temperature,
